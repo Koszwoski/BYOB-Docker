@@ -343,6 +343,26 @@ async function runAddonCommandById(botId, addonName, sub, args) {
   return runAddonCommand(botId, addonName, sub, args);
 }
 
+async function authBotById(botId, onCode) {
+  const profilesFolder = path.join(getProfilesDir(), botId);
+  fs.mkdirSync(profilesFolder, { recursive: true });
+  updateBot(botId, { profilesFolder });
+  let codeFired = false;
+  try {
+    const { Authflow, Titles } = await loadAuthflow();
+    const flow = new Authflow(
+      botId,
+      profilesFolder,
+      { flow: "live", authTitle: Titles.MinecraftNintendoSwitch, deviceType: "Nintendo" },
+      (code) => { codeFired = true; try { onCode?.(code); } catch (e) { console.error("[auth] onCode failed", e); } },
+    );
+    const token = await flow.getMinecraftJavaToken({ fetchProfile: true });
+    return { ok: true, cached: !codeFired, profile: token.profile };
+  } catch (error) {
+    return { ok: false, error: error.message || "auth_failed" };
+  }
+}
+
 process.on("SIGINT", () => { stopAllBotRuntimes(); flushStateSync(); process.exit(0); });
 process.on("SIGTERM", () => { stopAllBotRuntimes(); flushStateSync(); process.exit(0); });
 
@@ -374,6 +394,7 @@ if (process.env.DISCORD_ENABLED === "true") {
     enableAddonById,
     disableAddonById,
     runAddonCommandById,
+    authBotById,
     getBotCount,
   }).catch((error) => {
     console.error("[discord-control] failed to start", error);

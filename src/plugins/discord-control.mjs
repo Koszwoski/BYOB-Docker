@@ -300,6 +300,12 @@ async function runCmdForBot(botNum, bot, subCommand, subArgs, handlers) {
   if (!bot) return `${prefix} ⚠️ Bot ${botNum} ikke fundet`;
 
   try {
+    if (subCommand === "auth") {
+      const result = await handlers.authBotById(bot.id, (code) => postDeviceCode({ channel: handlers.channel }, code));
+      if (!result.ok) return `${prefix} ❌ ${result.error}`;
+      return `${prefix} ✅ Logged in as **${result.profile?.name ?? "unknown"}**`;
+    }
+
     if (subCommand === "connect" || subCommand === "c") {
       const host = subArgs[0];
       if (host) {
@@ -370,6 +376,7 @@ export async function startDiscordControl({
   enableAddonById,
   disableAddonById,
   runAddonCommandById,
+  authBotById,
   getBotCount,
   logger = console,
 }) {
@@ -538,6 +545,8 @@ export async function startDiscordControl({
           enableAddonById,
           disableAddonById,
           runAddonCommandById,
+          authBotById,
+          channel: message.channel,
         };
 
         const lines = await Promise.all(

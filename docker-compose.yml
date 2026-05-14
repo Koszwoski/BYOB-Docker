@@ -1,0 +1,31 @@
+networks:
+  botnet:
+    driver: bridge
+
+services:
+  bot1:
+    build: .
+    restart: unless-stopped
+    env_file: bot1/.env
+    volumes:
+      - ./bot1/data:/app/data
+    networks:
+      - botnet
+
+  bot2:
+    build: .
+    restart: unless-stopped
+    env_file: bot2/.env
+    volumes:
+      - ./bot2/data:/app/data
+    networks:
+      - botnet
+
+  bot3:
+    build: .
+    restart: unless-stopped
+    env_file: bot3/.env
+    volumes:
+      - ./bot3/data:/app/data
+    networks:
+      - botnet

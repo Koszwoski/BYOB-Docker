@@ -36,6 +36,7 @@ import {
   setDiscordServer,
   getDiscordServerId,
   updateBot,
+  initNumberedBots,
 } from "./data.mjs";
 import { listAddonsWithMeta } from "./addons/index.mjs";
 import { startDiscordControl } from "./plugins/discord-control.mjs";
@@ -296,6 +297,52 @@ async function runDiscordUserAddonCommand(discordUserId, addonName, sub, args) {
   return runAddonCommand(bot.id, addonName, sub, args);
 }
 
+function getBotCount() {
+  return parseInt(process.env.BOT_COUNT ?? "0", 10);
+}
+
+async function runBotActionById(botId, action) {
+  return runBotAction(botId, action);
+}
+
+function getStatusById(botId) {
+  const bot = getBot(botId);
+  if (!bot) return { ok: false, error: "bot_not_found" };
+  const server = bot.serverId ? getServer(bot.serverId) : null;
+  const runtime = getBotRuntimeInfo(botId);
+  return { ok: true, bot, server, runtime };
+}
+
+function setServerById(botId, host, port) {
+  const serverResult = findOrCreateServerByHost(host, port);
+  if (serverResult.error) return;
+  updateBot(botId, { serverId: serverResult.server.id });
+}
+
+async function enableAddonById(botId, name) {
+  setBotAddon(botId, name, { enabled: true });
+  if (isBotRunning(botId)) {
+    const state = (getBotAddons(botId) ?? {})[name] ?? {};
+    const result = await enableBotAddon(botId, name, state.config);
+    if (!result.ok) return { ok: false, error: result.error };
+    return { ok: true, hotApplied: true };
+  }
+  return { ok: true, hotApplied: false };
+}
+
+function disableAddonById(botId, name) {
+  setBotAddon(botId, name, { enabled: false });
+  if (isBotRunning(botId)) {
+    disableBotAddon(botId, name);
+    return { ok: true, hotApplied: true };
+  }
+  return { ok: true, hotApplied: false };
+}
+
+async function runAddonCommandById(botId, addonName, sub, args) {
+  return runAddonCommand(botId, addonName, sub, args);
+}
+
 process.on("SIGINT", () => { stopAllBotRuntimes(); flushStateSync(); process.exit(0); });
 process.on("SIGTERM", () => { stopAllBotRuntimes(); flushStateSync(); process.exit(0); });
 
@@ -303,6 +350,12 @@ const memMb = (process.memoryUsage().rss / 1024 / 1024).toFixed(1);
 console.log(`Minecraft Bot starting (idle RSS: ${memMb} MB)`);
 
 resumePersistedBots().catch((err) => console.error("[resume] failed", err));
+
+const botCount = parseInt(process.env.BOT_COUNT ?? "0", 10);
+if (botCount > 0) {
+  initNumberedBots(botCount);
+  console.log(`[init] ${botCount} numbered bot(s) ready`);
+}
 
 if (process.env.DISCORD_ENABLED === "true") {
   startDiscordControl({
@@ -315,6 +368,13 @@ if (process.env.DISCORD_ENABLED === "true") {
     enableDiscordUserAddon,
     disableDiscordUserAddon,
     runDiscordUserAddonCommand,
+    runBotActionById,
+    getStatusById,
+    setServerById,
+    enableAddonById,
+    disableAddonById,
+    runAddonCommandById,
+    getBotCount,
   }).catch((error) => {
     console.error("[discord-control] failed to start", error);
   });

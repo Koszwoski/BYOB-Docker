@@ -3,6 +3,7 @@ import {
   addCommandAllowlistUser,
   bots,
   getBot,
+  getBotByNumber,
   getCommandAllowlist,
   removeCommandAllowlistUser,
   removeDiscordLink,
@@ -11,6 +12,7 @@ import {
   setDiscordServer,
   updateBot,
 } from "../data.mjs";
+import { parseTargets } from "../lib/target-parser.mjs";
 
 const PREFIX = ".";
 
@@ -288,6 +290,70 @@ function unbindUser(targetUserId) {
   return { ok: true };
 }
 
+/**
+ * Execute a single BYOB sub-command against a specific bot by ID.
+ * Returns a string result for the aggregated reply.
+ */
+async function runCmdForBot(botNum, bot, subCommand, subArgs, handlers) {
+  const prefix = `[${botNum}]`;
+
+  if (!bot) return `${prefix} ⚠️ Bot ${botNum} ikke fundet`;
+
+  try {
+    if (subCommand === "connect" || subCommand === "c") {
+      const host = subArgs[0];
+      if (host) {
+        const port = subArgs[1] ? Number(subArgs[1]) : 25565;
+        await handlers.setServerById(bot.id, host, port);
+      }
+      const result = await handlers.runBotActionById(bot.id, "start");
+      if (result.error) return `${prefix} ❌ ${result.error}`;
+      return `${prefix} ✅ Connecting...`;
+    }
+
+    if (subCommand === "disconnect" || subCommand === "dc") {
+      const result = await handlers.runBotActionById(bot.id, "stop");
+      if (result.error) return `${prefix} ❌ ${result.error}`;
+      return `${prefix} ✅ Disconnected`;
+    }
+
+    if (subCommand === "status" || subCommand === "s") {
+      const result = handlers.getStatusById(bot.id);
+      const s = result.bot?.status ?? "unknown";
+      const emoji = s === "online" ? "🟢" : s === "connecting" ? "🟡" : "🔴";
+      return `${prefix} ${emoji} ${s}`;
+    }
+
+    if (subCommand === "enable" || subCommand === "e") {
+      const [name] = subArgs;
+      if (!name) return `${prefix} ⚠️ Usage: .enable <addon>`;
+      const result = await handlers.enableAddonById(bot.id, name);
+      if (!result.ok) return `${prefix} ❌ ${result.error}`;
+      return `${prefix} ✅ ${name} enabled`;
+    }
+
+    if (subCommand === "disable" || subCommand === "d") {
+      const [name] = subArgs;
+      if (!name) return `${prefix} ⚠️ Usage: .disable <addon>`;
+      const result = handlers.disableAddonById(bot.id, name);
+      if (!result.ok) return `${prefix} ❌ ${result.error}`;
+      return `${prefix} ✅ ${name} disabled`;
+    }
+
+    if (subCommand === "addon") {
+      const [addonName, sub, ...addonArgs] = subArgs;
+      if (!addonName || !sub) return `${prefix} ⚠️ Usage: .addon <name> <sub> [args]`;
+      const result = await handlers.runAddonCommandById(bot.id, addonName, sub, addonArgs);
+      if (!result.ok) return `${prefix} ❌ ${result.error}`;
+      return `${prefix} ✅ ${result.result}`;
+    }
+
+    return `${prefix} ⚠️ Unknown sub-command: ${subCommand}`;
+  } catch (err) {
+    return `${prefix} ❌ ${err.message}`;
+  }
+}
+
 export async function startDiscordControl({
   authDiscordUser,
   setDiscordUserServer,
@@ -298,6 +364,13 @@ export async function startDiscordControl({
   enableDiscordUserAddon,
   disableDiscordUserAddon,
   runDiscordUserAddonCommand,
+  runBotActionById,
+  getStatusById,
+  setServerById,
+  enableAddonById,
+  disableAddonById,
+  runAddonCommandById,
+  getBotCount,
   logger = console,
 }) {
   const token = process.env.DISCORD_TOKEN;
@@ -434,6 +507,47 @@ export async function startDiscordControl({
         }
         unbindUser(target);
         await message.reply(`User <@${target}> removed from the allow list and their Discord link cleared.`);
+        return;
+      }
+
+      if (command === "cmd") {
+        if (!hasManagementPermission(message, adminRoleId)) {
+          await message.reply("Only admins can use `.cmd`.");
+          return;
+        }
+
+        const [targetStr, subRaw, ...subArgs] = args;
+        if (!targetStr || !subRaw) {
+          await message.reply("Usage: `.cmd <targets> .<command> [args]`\nExample: `.cmd 1-3 .connect 2b2t.org`");
+          return;
+        }
+
+        const subCommand = subRaw.startsWith(".") ? subRaw.slice(1).toLowerCase() : subRaw.toLowerCase();
+        const maxBots = getBotCount();
+        const targets = parseTargets(targetStr, maxBots);
+
+        if (targets.length === 0) {
+          await message.reply(`No valid targets in \`${targetStr}\`. Use e.g. \`1-3\`, \`1,5\`, \`all\`.`);
+          return;
+        }
+
+        const handlers = {
+          runBotActionById,
+          getStatusById,
+          setServerById,
+          enableAddonById,
+          disableAddonById,
+          runAddonCommandById,
+        };
+
+        const lines = await Promise.all(
+          targets.map((n) => {
+            const bot = getBotByNumber(n);
+            return runCmdForBot(n, bot, subCommand, subArgs, handlers);
+          })
+        );
+
+        await message.reply(lines.join("\n"));
         return;
       }
 

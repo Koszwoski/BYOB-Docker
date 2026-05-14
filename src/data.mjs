@@ -340,3 +340,27 @@ export function removeDiscordLink(discordId) {
   }
   return false;
 }
+
+/**
+ * Get a bot by its 1-based number (the `number` field on the bot object).
+ * @param {number} n
+ * @returns {object|null}
+ */
+export function getBotByNumber(n) {
+  return bots.find((b) => b.number === n) ?? null;
+}
+
+/**
+ * Ensure bots numbered 1..count exist in state. Creates missing ones.
+ * Existing bots are never modified.
+ * @param {number} count
+ */
+export function initNumberedBots(count) {
+  for (let n = 1; n <= count; n++) {
+    const exists = bots.find((b) => b.number === n);
+    if (!exists) {
+      addBot({ id: `bot${n}`, name: `bot${n}`, username: `bot${n}`, number: n });
+    }
+  }
+  flushStateSync();
+}

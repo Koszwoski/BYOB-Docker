@@ -1,0 +1,20 @@
+{
+  "name": "build-your-own-bot",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Discord-controlled Minecraft bot with a lazy-loaded addon system. Build your own bot by enabling only the features you need.",
+  "type": "module",
+  "scripts": {
+    "start": "node --max-old-space-size=256 src/main.mjs",
+    "dev": "node src/main.mjs"
+  },
+  "dependencies": {
+    "discord.js": "^14.26.4",
+    "mineflayer": "^4.37.1",
+    "mineflayer-pathfinder": "^2.4.5",
+    "prismarine-auth": "^3.1.1"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

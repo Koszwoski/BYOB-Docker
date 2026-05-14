@@ -6,7 +6,7 @@
 // 1. Create backend/src/addons/<name>.mjs that exports { meta, init }
 // 2. Append the name to AVAILABLE below.
 
-const AVAILABLE = [];
+const AVAILABLE = ["sign-switcher"];
 
 const cache = new Map();
 

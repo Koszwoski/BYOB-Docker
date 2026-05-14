@@ -359,7 +359,22 @@ export function initNumberedBots(count) {
   for (let n = 1; n <= count; n++) {
     const exists = bots.find((b) => b.number === n);
     if (!exists) {
-      addBot({ id: `bot${n}`, name: `bot${n}`, username: `bot${n}`, number: n });
+      const bot = {
+        id: `bot${n}`,
+        name: `bot${n}`,
+        username: `bot${n}`,
+        number: n,
+        auth: "microsoft",
+        status: "offline",
+        ping: null,
+        serverId: null,
+        profilesFolder: null,
+        discordUserId: null,
+        shouldRun: false,
+        x: 0, y: 64, z: 0,
+        lastCallback: null,
+      };
+      bots.push(bot);
     }
   }
   flushStateSync();

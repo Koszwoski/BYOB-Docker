@@ -69,6 +69,17 @@ function runtimeUpdate(update) {
 
 let discordNotify = null;
 
+// Deduplicate disconnect messages: don't send the same text for the same bot within 60s
+const disconnectDedup = new Map();
+function onDisconnect(text) {
+  if (!discordNotify) return;
+  const now = Date.now();
+  const last = disconnectDedup.get(text) ?? 0;
+  if (now - last < 60_000) return;
+  disconnectDedup.set(text, now);
+  discordNotify(text);
+}
+
 async function runBotAction(id, action, options = {}) {
   const bot = getBot(id);
   if (!bot) return { error: "not_found" };
@@ -100,6 +111,7 @@ async function runBotAction(id, action, options = {}) {
     serverConfig: getServer(connectingBot.serverId),
     onUpdate: runtimeUpdate,
     onDeviceCode: options.onDeviceCode,
+    onDisconnect,
     onKickAlert: discordNotify
       ? (botId, count, reason) => {
           const reasonStr = typeof reason === 'string' ? reason : JSON.stringify(reason);

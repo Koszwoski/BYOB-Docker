@@ -95,7 +95,17 @@ const kickHistory = new Map(); // botId → timestamp[]
 
 // startBotRuntime is async because the first invocation lazy-imports
 // mineflayer. Subsequent invocations resolve immediately from cache.
-export async function startBotRuntime({ botConfig, serverConfig, onUpdate, onDeviceCode, onLog = console.log, onKickAlert }) {
+function extractKickReason(reason) {
+  if (!reason) return 'unknown';
+  const str = typeof reason === 'string' ? reason : JSON.stringify(reason);
+  try {
+    const p = JSON.parse(str);
+    if (typeof p === 'string') return p;
+    return p?.text || p?.translate || p?.extra?.[0]?.text || str;
+  } catch { return str; }
+}
+
+export async function startBotRuntime({ botConfig, serverConfig, onUpdate, onDeviceCode, onLog = console.log, onKickAlert, onDisconnect }) {
   if (runningBots.has(botConfig.id)) {
     return { ok: true, alreadyRunning: true };
   }
@@ -175,7 +185,9 @@ export async function startBotRuntime({ botConfig, serverConfig, onUpdate, onDev
   });
 
   mineflayerBot.on("kicked", (reason) => {
-    onLog(`[mineflayer-runtime] ${botConfig.id} kicked: ${JSON.stringify(reason)}`);
+    const readable = extractKickReason(reason);
+    onLog(`[mineflayer-runtime] ${botConfig.id} kicked: ${readable}`);
+    onDisconnect?.(`\`${botConfig.id}\` kicked: ${readable}`);
     if (onKickAlert) {
       const now = Date.now();
       const recent = (kickHistory.get(botConfig.id) ?? []).filter((t) => now - t < KICK_ALERT_WINDOW_MS);
@@ -190,6 +202,7 @@ export async function startBotRuntime({ botConfig, serverConfig, onUpdate, onDev
 
   mineflayerBot.on("error", (error) => {
     onLog(`[mineflayer-runtime] ${botConfig.id} error: ${error.message}`);
+    onDisconnect?.(`\`${botConfig.id}\` error: ${error.message}`);
   });
 
   mineflayerBot.on("end", () => {

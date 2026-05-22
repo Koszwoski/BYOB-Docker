@@ -346,6 +346,15 @@ async function runCmdForBot(botNum, bot, subCommand, subArgs, handlers) {
       return `${prefix} ✅ ${name} disabled`;
     }
 
+    if (subCommand === "server") {
+      const host = subArgs[0];
+      if (!host) return `${prefix} ⚠️ Usage: .server <ip> [port]`;
+      const port = subArgs[1] ? Number(subArgs[1]) : 25565;
+      const result = handlers.setServerById(bot.id, host, port);
+      if (result?.error) return `${prefix} ❌ ${result.error}`;
+      return `${prefix} ✅ Server sat til \`${host}:${port}\``;
+    }
+
     if (subCommand === "addon") {
       const [addonName, sub, ...addonArgs] = subArgs;
       if (!addonName || !sub) return `${prefix} ⚠️ Usage: .addon <name> <sub> [args]`;

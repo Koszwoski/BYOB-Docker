@@ -89,9 +89,13 @@ export function disableBotAddon(botId, name, onLog = console.log) {
   return { ok: true, wasActive: removed };
 }
 
+const KICK_ALERT_THRESHOLD = Number(process.env.KICK_ALERT_COUNT ?? 5);
+const KICK_ALERT_WINDOW_MS = Number(process.env.KICK_ALERT_WINDOW_MS ?? 600_000);
+const kickHistory = new Map(); // botId → timestamp[]
+
 // startBotRuntime is async because the first invocation lazy-imports
 // mineflayer. Subsequent invocations resolve immediately from cache.
-export async function startBotRuntime({ botConfig, serverConfig, onUpdate, onDeviceCode, onLog = console.log }) {
+export async function startBotRuntime({ botConfig, serverConfig, onUpdate, onDeviceCode, onLog = console.log, onKickAlert }) {
   if (runningBots.has(botConfig.id)) {
     return { ok: true, alreadyRunning: true };
   }
@@ -172,6 +176,16 @@ export async function startBotRuntime({ botConfig, serverConfig, onUpdate, onDev
 
   mineflayerBot.on("kicked", (reason) => {
     onLog(`[mineflayer-runtime] ${botConfig.id} kicked: ${JSON.stringify(reason)}`);
+    if (onKickAlert) {
+      const now = Date.now();
+      const recent = (kickHistory.get(botConfig.id) ?? []).filter((t) => now - t < KICK_ALERT_WINDOW_MS);
+      recent.push(now);
+      kickHistory.set(botConfig.id, recent);
+      if (recent.length >= KICK_ALERT_THRESHOLD) {
+        kickHistory.set(botConfig.id, []);
+        onKickAlert(botConfig.id, recent.length, reason);
+      }
+    }
   });
 
   mineflayerBot.on("error", (error) => {

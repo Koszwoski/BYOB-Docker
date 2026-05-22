@@ -67,6 +67,8 @@ function runtimeUpdate(update) {
   return getBot(update.id);
 }
 
+let discordNotify = null;
+
 async function runBotAction(id, action, options = {}) {
   const bot = getBot(id);
   if (!bot) return { error: "not_found" };
@@ -98,6 +100,12 @@ async function runBotAction(id, action, options = {}) {
     serverConfig: getServer(connectingBot.serverId),
     onUpdate: runtimeUpdate,
     onDeviceCode: options.onDeviceCode,
+    onKickAlert: discordNotify
+      ? (botId, count, reason) => {
+          const reasonStr = typeof reason === 'string' ? reason : JSON.stringify(reason);
+          discordNotify(`**[ALERT]** \`${botId}\` kicked ${count}x in 10 min — reason: ${reasonStr}`);
+        }
+      : undefined,
   });
 
   if (!result.ok) {
@@ -396,6 +404,8 @@ if (process.env.DISCORD_ENABLED === "true") {
     runAddonCommandById,
     authBotById,
     getBotCount,
+  }).then((discord) => {
+    if (discord) discordNotify = discord.notify;
   }).catch((error) => {
     console.error("[discord-control] failed to start", error);
   });

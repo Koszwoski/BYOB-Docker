@@ -397,8 +397,12 @@ export async function startDiscordControl({
     ],
   });
 
-  client.once("clientReady", () => {
+  let botChannel = null;
+  client.once("clientReady", async () => {
     logger.log(`[discord-control] logged in as ${client.user?.tag}`);
+    try { botChannel = await client.channels.fetch(channelId); } catch (err) {
+      logger.log(`[discord-control] could not fetch channel: ${err.message}`);
+    }
   });
 
   client.on("messageCreate", async (message) => {
@@ -720,5 +724,13 @@ export async function startDiscordControl({
   });
 
   await client.login(token);
-  return client;
+  return {
+    client,
+    notify: async (text) => {
+      if (!botChannel) return;
+      try { await botChannel.send(text); } catch (err) {
+        logger.log(`[discord-control] notify failed: ${err.message}`);
+      }
+    },
+  };
 }

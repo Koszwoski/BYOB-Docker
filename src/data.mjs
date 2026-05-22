@@ -351,15 +351,27 @@ export function getBotByNumber(n) {
 }
 
 /**
- * Ensure bots numbered 1..count exist in state. Creates missing ones.
- * Existing bots are never modified.
+ * Ensure bots numbered (offset+1)..(offset+count) exist in state.
+ * Removes bots outside that range. Creates missing ones.
  * @param {number} count
+ * @param {number} offset
  */
-export function initNumberedBots(count) {
-  for (let n = 1; n <= count; n++) {
+export function initNumberedBots(count, offset = 0) {
+  const first = offset + 1;
+  const last = offset + count;
+
+  // Remove bots whose number is outside this instance's range
+  for (let i = bots.length - 1; i >= 0; i--) {
+    const n = bots[i].number;
+    if (typeof n === 'number' && (n < first || n > last)) {
+      bots.splice(i, 1);
+    }
+  }
+
+  for (let n = first; n <= last; n++) {
     const exists = bots.find((b) => b.number === n);
     if (!exists) {
-      const bot = {
+      bots.push({
         id: `bot${n}`,
         name: `bot${n}`,
         username: `bot${n}`,
@@ -373,8 +385,7 @@ export function initNumberedBots(count) {
         shouldRun: false,
         x: 0, y: 64, z: 0,
         lastCallback: null,
-      };
-      bots.push(bot);
+      });
     }
   }
   flushStateSync();

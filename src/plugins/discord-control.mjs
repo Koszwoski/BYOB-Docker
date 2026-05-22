@@ -544,12 +544,20 @@ export async function startDiscordControl({
 
         const subCommand = subRaw.startsWith(".") ? subRaw.slice(1).toLowerCase() : subRaw.toLowerCase();
         const maxBots = getBotCount();
-        const targets = parseTargets(targetStr, maxBots);
+        const allTargets = parseTargets(targetStr, maxBots);
 
-        if (targets.length === 0) {
+        if (allTargets.length === 0) {
           await message.reply(`No valid targets in \`${targetStr}\`. Use e.g. \`1-3\`, \`1,5\`, \`all\`.`);
           return;
         }
+
+        // Only handle bots in this instance's range — other instances handle the rest
+        const instanceOffset = Number(process.env.BOT_OFFSET ?? 0);
+        const instanceCount = Number(process.env.BOT_COUNT ?? 0);
+        const myMin = instanceOffset + 1;
+        const myMax = instanceOffset + instanceCount;
+        const targets = allTargets.filter((n) => n >= myMin && n <= myMax);
+        if (targets.length === 0) return; // silently ignore — another instance handles these
 
         const handlers = {
           runBotActionById,

@@ -130,7 +130,7 @@ export function init(bot, config, ctx) {
     const block = bot.findBlock({
       matching: (b) => {
         if (b.name === 'air' || b.name.includes('sign') || b.name.includes('water') || b.name.includes('lava')) return false;
-        if (b.position.distanceTo(botPos) < 2) return false;
+        if (!b.position || b.position.distanceTo(botPos) < 2) return false;
         const above = bot.blockAt(b.position.offset(0, 1, 0));
         const above2 = bot.blockAt(b.position.offset(0, 2, 0));
         return above?.name === 'air' && above2?.name === 'air';

@@ -179,30 +179,32 @@ export async function startBotRuntime({ botConfig, serverConfig, onUpdate, onDev
     });
   }
 
-  // 2b2t sends queue position via subtitle title packet ("Position: X")
-  // Mineflayer normalises both legacy and new title packets into bot.on("title", text, type)
+  // 2b2t sends queue position via subtitle: nested NBT JSON with "Position in queue: X"
+  // Use regex on stringified packet to extract number regardless of nesting depth
   mineflayerBot.on("title", (text, type) => {
     if (type !== "subtitle") return;
     try {
-      const parts = text.split(":");
-      if (parts.length >= 2) {
-        const pos = parseInt(parts[1].trim(), 10);
-        if (!isNaN(pos)) runtime.queuePosition = pos;
-      }
+      const raw = typeof text === "string" ? text : JSON.stringify(text);
+      const match = raw.match(/Position in queue:\s*(\d+)/i);
+      if (match) runtime.queuePosition = parseInt(match[1], 10);
     } catch (_) {}
   });
 
-  // Tab list header contains queue type ("priority queue" / "in queue")
+  // Queue type from action bar ("Priority Queue" or regular)
+  mineflayerBot._client.on("action_bar", (packet) => {
+    try {
+      const raw = typeof packet.text === "string" ? packet.text : JSON.stringify(packet.text);
+      if (/priority/i.test(raw)) runtime.queueType = "priority";
+      else if (/queue/i.test(raw)) runtime.queueType = "regular";
+    } catch (_) {}
+  });
+
   mineflayerBot._client.on("playerlist_header", (packet) => {
     try {
-      const raw = packet.header;
-      const header = typeof raw === "string" ? raw : JSON.stringify(raw);
-      const lower = header.toLowerCase();
-      if (lower.includes("priority") || lower.includes("prio")) {
-        runtime.queueType = "priority";
-      } else if (lower.includes("queue") || lower.includes("2b2t is full") || lower.includes("pending")) {
-        runtime.queueType = "regular";
-      }
+      const raw = typeof packet.header === "string" ? packet.header : JSON.stringify(packet.header);
+      const lower = raw.toLowerCase();
+      if (lower.includes("priority") || lower.includes("prio")) runtime.queueType = "priority";
+      else if (lower.includes("queue") || lower.includes("2b2t is full") || lower.includes("pending")) runtime.queueType = "regular";
     } catch (_) {}
   });
 

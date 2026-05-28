@@ -102,11 +102,15 @@ function scheduleReconnect(botId, lastError) {
   const bot = getBot(botId);
   if (!bot?.shouldRun) return;
   if (reconnectTimers.has(botId)) return;
-  const is429 = typeof lastError === "string" && lastError.includes("429");
+  const err = typeof lastError === "string" ? lastError.toLowerCase() : "";
+  const is429 = err.includes("429");
+  const isThrottled = err.includes("logging in too fast") || err.includes("connection throttled") || err.includes("lost connection");
   const delay = is429
     ? Number(process.env.BOT_RECONNECT_DELAY_429_MS ?? 180_000)
+    : isThrottled
+    ? Number(process.env.BOT_RECONNECT_DELAY_THROTTLE_MS ?? 300_000)
     : Number(process.env.BOT_RECONNECT_DELAY_MS ?? 30_000);
-  if (is429) console.log(`[reconnect] ${botId} got 429 — delaying ${delay}ms before retry`);
+  if (is429 || isThrottled) console.log(`[reconnect] ${botId} throttled (${lastError}) — waiting ${delay / 1000}s`);
   const timer = setTimeout(async () => {
     reconnectTimers.delete(botId);
     const current = getBot(botId);

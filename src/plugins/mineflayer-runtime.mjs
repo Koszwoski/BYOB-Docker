@@ -230,6 +230,7 @@ export async function startBotRuntime({ botConfig, serverConfig, onUpdate, onDev
 
   mineflayerBot.on("kicked", (reason) => {
     const readable = extractKickReason(reason);
+    runtime.lastError = readable;
     onLog(`[mineflayer-runtime] ${botConfig.id} kicked: ${readable}`);
     onDisconnect?.(`\`${botConfig.id}\` kicked: ${readable}`);
     if (onKickAlert) {

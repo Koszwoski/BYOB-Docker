@@ -179,13 +179,11 @@ export async function startBotRuntime({ botConfig, serverConfig, onUpdate, onDev
     });
   }
 
-  // 2b2t sends queue position via the subtitle title packet ("Position: X")
-  // and queue type via the tab list header ("priority queue" / "in queue")
-  mineflayerBot._client.on("set_title_subtitle", (packet) => {
+  // 2b2t sends queue position via subtitle title packet ("Position: X")
+  // Mineflayer normalises both legacy and new title packets into bot.on("title", text, type)
+  mineflayerBot.on("title", (text, type) => {
+    if (type !== "subtitle") return;
     try {
-      const text = typeof packet.text === "string"
-        ? JSON.parse(packet.text)?.text ?? packet.text
-        : packet.text?.text ?? JSON.stringify(packet.text);
       const parts = text.split(":");
       if (parts.length >= 2) {
         const pos = parseInt(parts[1].trim(), 10);
@@ -194,11 +192,11 @@ export async function startBotRuntime({ botConfig, serverConfig, onUpdate, onDev
     } catch (_) {}
   });
 
+  // Tab list header contains queue type ("priority queue" / "in queue")
   mineflayerBot._client.on("playerlist_header", (packet) => {
     try {
-      const header = typeof packet.header === "string"
-        ? packet.header
-        : JSON.stringify(packet.header);
+      const raw = packet.header;
+      const header = typeof raw === "string" ? raw : JSON.stringify(raw);
       const lower = header.toLowerCase();
       if (lower.includes("priority") || lower.includes("prio")) {
         runtime.queueType = "priority";

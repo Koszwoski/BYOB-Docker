@@ -51,6 +51,33 @@ import {
   stopBotRuntime,
 } from "./plugins/mineflayer-runtime.mjs";
 
+function readMcNameFromCache(profilesFolder) {
+  try {
+    const files = fs.readdirSync(profilesFolder);
+    const mcaFile = files.find((f) => f.includes("mca"));
+    if (!mcaFile) return null;
+    const cache = JSON.parse(fs.readFileSync(path.join(profilesFolder, mcaFile), "utf8"));
+    const token = cache?.mca?.access_token;
+    if (!token) return null;
+    const payload = JSON.parse(Buffer.from(token.split(".")[1], "base64url").toString());
+    return payload?.pfd?.[0]?.name ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function getMcNameById(botId) {
+  const bot = getBot(botId);
+  if (!bot) return null;
+  if (bot.status === "online") {
+    const runtime = getBotRuntimeInfo(botId);
+    if (runtime?.mcUsername) return runtime.mcUsername;
+  }
+  if (bot.mcName) return bot.mcName;
+  if (bot.profilesFolder) return readMcNameFromCache(bot.profilesFolder);
+  return null;
+}
+
 function runtimeUpdate(update) {
   // Persist the latest known position/status. No broadcast - nothing
   // is listening because there is no HTTP server in this process.
@@ -62,12 +89,32 @@ function runtimeUpdate(update) {
     x: update.x ?? bot.x,
     y: update.y ?? bot.y,
     z: update.z ?? bot.z,
+    mcName: update.status === "online" ? (update.name || bot.mcName) : bot.mcName,
     lastCallback: new Date().toISOString(),
   });
   return getBot(update.id);
 }
 
 let discordNotify = null;
+const reconnectTimers = new Map();
+
+function scheduleReconnect(botId, lastError) {
+  const bot = getBot(botId);
+  if (!bot?.shouldRun) return;
+  if (reconnectTimers.has(botId)) return;
+  const is429 = typeof lastError === "string" && lastError.includes("429");
+  const delay = is429
+    ? Number(process.env.BOT_RECONNECT_DELAY_429_MS ?? 180_000)
+    : Number(process.env.BOT_RECONNECT_DELAY_MS ?? 30_000);
+  if (is429) console.log(`[reconnect] ${botId} got 429 — delaying ${delay}ms before retry`);
+  const timer = setTimeout(async () => {
+    reconnectTimers.delete(botId);
+    const current = getBot(botId);
+    if (!current?.shouldRun) return;
+    await runBotAction(botId, "start");
+  }, delay);
+  reconnectTimers.set(botId, timer);
+}
 
 // Deduplicate disconnect messages: don't send the same text for the same bot within 60s
 const disconnectDedup = new Map();
@@ -87,6 +134,10 @@ async function runBotAction(id, action, options = {}) {
   if (action === "stop") {
     stopBotRuntime(id);
     updateBot(id, { shouldRun: false });
+    if (reconnectTimers.has(id)) {
+      clearTimeout(reconnectTimers.get(id));
+      reconnectTimers.delete(id);
+    }
     const stoppedBot = setBotStatus(id, "offline");
     return { bot: stoppedBot, runtime: "stopped" };
   }
@@ -112,6 +163,7 @@ async function runBotAction(id, action, options = {}) {
     onUpdate: runtimeUpdate,
     onDeviceCode: options.onDeviceCode,
     onDisconnect,
+    onEnd: scheduleReconnect,
     onKickAlert: discordNotify
       ? (botId, count, reason) => {
           const reasonStr = typeof reason === 'string' ? reason : JSON.stringify(reason);
@@ -129,10 +181,23 @@ async function runBotAction(id, action, options = {}) {
 }
 
 async function resumePersistedBots() {
-  const toResume = bots.filter((bot) => bot.shouldRun);
+  const offset = parseInt(process.env.BOT_OFFSET ?? "0", 10);
+  const count = parseInt(process.env.BOT_COUNT ?? "0", 10);
+  const myMin = offset + 1;
+  const myMax = offset + count;
+  const toResume = bots.filter((bot) => {
+    if (!bot.shouldRun) return false;
+    if (typeof bot.number === "number") return bot.number >= myMin && bot.number <= myMax;
+    return true;
+  });
   if (toResume.length === 0) return;
   console.log(`[resume] starting ${toResume.length} persisted bot(s)`);
-  for (const bot of toResume) {
+  const delay = Number(process.env.BOT_RESUME_DELAY_MS ?? 7000);
+  const resumeOffset = Number(process.env.BOT_RESUME_OFFSET_MS ?? 0);
+  if (resumeOffset > 0) await new Promise((r) => setTimeout(r, resumeOffset));
+  for (let i = 0; i < toResume.length; i++) {
+    if (i > 0) await new Promise((r) => setTimeout(r, delay));
+    const bot = toResume[i];
     const result = await runBotAction(bot.id, "start");
     if (result.error) {
       console.warn(`[resume] ${bot.id} failed: ${result.error}`);
@@ -318,7 +383,9 @@ async function runDiscordUserAddonCommand(discordUserId, addonName, sub, args) {
 }
 
 function getBotCount() {
-  return parseInt(process.env.BOT_COUNT ?? "0", 10);
+  const offset = parseInt(process.env.BOT_OFFSET ?? "0", 10);
+  const count = parseInt(process.env.BOT_COUNT ?? "0", 10);
+  return parseInt(process.env.BOT_TOTAL ?? String(offset + count), 10);
 }
 
 async function runBotActionById(botId, action) {
@@ -367,19 +434,31 @@ async function authBotById(botId, onCode) {
   const profilesFolder = path.join(getProfilesDir(), botId);
   fs.mkdirSync(profilesFolder, { recursive: true });
   updateBot(botId, { profilesFolder });
-  let codeFired = false;
-  try {
-    const { Authflow, Titles } = await loadAuthflow();
-    const flow = new Authflow(
-      botId,
-      profilesFolder,
-      { flow: "live", authTitle: Titles.MinecraftNintendoSwitch, deviceType: "Nintendo" },
-      (code) => { codeFired = true; try { onCode?.(code); } catch (e) { console.error("[auth] onCode failed", e); } },
-    );
-    const token = await flow.getMinecraftJavaToken({ fetchProfile: true });
-    return { ok: true, cached: !codeFired, profile: token.profile };
-  } catch (error) {
-    return { ok: false, error: error.message || "auth_failed" };
+
+  const BASE_RETRY_MS = Number(process.env.AUTH_RETRY_DELAY_MS ?? 15_000);
+  const MAX_RETRIES = 4;
+
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    let codeFired = false;
+    try {
+      const { Authflow, Titles } = await loadAuthflow();
+      const flow = new Authflow(
+        botId,
+        profilesFolder,
+        { flow: "live", authTitle: Titles.MinecraftNintendoSwitch, deviceType: "Nintendo" },
+        (code) => { codeFired = true; try { onCode?.(code); } catch (e) { console.error("[auth] onCode failed", e); } },
+      );
+      const token = await flow.getMinecraftJavaToken({ fetchProfile: true });
+      if (token.profile?.name) updateBot(botId, { mcName: token.profile.name });
+      return { ok: true, cached: !codeFired, profile: token.profile };
+    } catch (error) {
+      if (error.message?.includes("429") && attempt < MAX_RETRIES) {
+        const jitter = Math.random() * BASE_RETRY_MS;
+        await new Promise((r) => setTimeout(r, BASE_RETRY_MS + jitter));
+        continue;
+      }
+      return { ok: false, error: error.message || "auth_failed" };
+    }
   }
 }
 
@@ -416,6 +495,7 @@ if (process.env.DISCORD_ENABLED === "true") {
     disableAddonById,
     runAddonCommandById,
     authBotById,
+    getMcNameById,
     getBotCount,
   }).then((discord) => {
     if (discord) discordNotify = discord.notify;

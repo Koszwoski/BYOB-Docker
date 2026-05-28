@@ -1,11 +1,30 @@
-import { pathfinder, Movements, goals } from 'mineflayer-pathfinder';
+import _pf from 'mineflayer-pathfinder';
+const { pathfinder, Movements, goals } = _pf;
 import { Vec3 } from 'vec3';
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
 import {
   loadPresets,
   savePresets,
   matchesAnyPreset,
   getRandomPreset,
 } from './sign-switcher-presets.mjs';
+
+const CLAIMED_PATH = path.join(process.cwd(), 'data', 'sign-switcher-claimed.json');
+
+async function loadClaimed() {
+  try {
+    return new Set(JSON.parse(await fs.readFile(CLAIMED_PATH, 'utf8')));
+  } catch {
+    return new Set();
+  }
+}
+
+async function saveClaimed(set) {
+  try {
+    await fs.writeFile(CLAIMED_PATH, JSON.stringify([...set]));
+  } catch {}
+}
 
 const { GoalNear } = goals;
 
@@ -14,7 +33,7 @@ export const meta = {
   description: 'Wanders and replaces signs with random preset text.',
   defaultConfig: {
     scanIntervalTicks: 20,
-    wanderRange: 100,
+    wanderRange: 16,
     writeDelayMs: 250,
   },
 };
@@ -30,13 +49,13 @@ export function init(bot, config, ctx) {
   let scanTick = 0;
   let tickTimer = null;
 
-  // Cache sign text from block entity packets for loop prevention.
-  // ownWrites tracks positions we wrote ourselves so server echoes can't overwrite our cache.
-  const signTextCache = new Map();
-  const ownWrites = new Set();
+  // claimed: shared across all bot instances and persists across restarts.
+  // Loaded once at init, written to disk whenever a sign is claimed or skipped.
+  let claimed = new Set();
 
   function extractMsgText(m) {
     try {
+      // m may be a raw string, a prismarine-nbt {type,value} wrapper, or an NBT compound
       const raw = (m !== null && typeof m === 'object' && 'value' in m) ? m.value : m;
       if (typeof raw === 'string') {
         const p = JSON.parse(raw);
@@ -53,38 +72,26 @@ export function init(bot, config, ctx) {
     return '';
   }
 
-  bot._client.on('block_entity_data', (packet) => {
-    const { x, y, z } = packet.location;
-    const key = `${x},${y},${z}`;
-    if (ownWrites.has(key)) return; // we wrote this — trust our own cache, ignore server echo
-    const nbt = packet.nbtData;
-    if (!nbt) return;
+  // Read sign lines directly from mineflayer's stored block entity (works for all versions).
+  function getSignLines(pos) {
+    const block = bot.blockAt(pos);
+    if (!block?.entity) return null;
+    const nbt = block.entity;
+    // 1.18+ format: front_text.messages
     const frontText = nbt.value?.front_text?.value;
-    if (!frontText) return;
-    const msgs = frontText.messages?.value?.value ?? [];
-    if (msgs.length === 0) return;
-    const lines = msgs.map(extractMsgText);
-    signTextCache.set(key, lines);
-  });
+    if (frontText) {
+      const msgs = frontText.messages?.value?.value ?? [];
+      if (!msgs.length) return null;
+      return msgs.map(extractMsgText);
+    }
+    // 1.12.2 format: Text1-Text4
+    const texts = [nbt.value?.Text1?.value, nbt.value?.Text2?.value, nbt.value?.Text3?.value, nbt.value?.Text4?.value];
+    if (texts.every((t) => t === undefined)) return null;
+    return texts.map((t) => extractMsgText(t ?? '{"text":""}'));
+  }
 
-  function packetBreak(block) {
-    const pos = block.position;
-    return new Promise((resolve, reject) => {
-      const eventName = `blockUpdate:${pos}`;
-      const timeout = setTimeout(() => {
-        bot.removeListener(eventName, onUpdate);
-        reject(new Error('packetBreak timeout'));
-      }, 3000);
-      function onUpdate(_old, newBlock) {
-        if (newBlock?.type !== 0) return;
-        clearTimeout(timeout);
-        bot.removeListener(eventName, onUpdate);
-        resolve();
-      }
-      bot.on(eventName, onUpdate);
-      bot._client.write('block_dig', { status: 0, location: pos, face: 1 });
-      bot._client.write('block_dig', { status: 2, location: pos, face: 1 });
-    });
+  async function packetBreak(block) {
+    await bot.dig(block, true);
   }
 
   async function reloadPresets() {
@@ -94,9 +101,10 @@ export function init(bot, config, ctx) {
   function startWander() {
     if (stopped || !bot.entity) return;
     const pos = bot.entity.position;
-    const range = config.wanderRange ?? 100;
-    const x = Math.floor(pos.x) + Math.floor(Math.random() * (range * 2 + 1)) - range;
-    const z = Math.floor(pos.z) + Math.floor(Math.random() * (range * 2 + 1)) - range;
+    const angle = Math.random() * Math.PI * 2;
+    const dist = 50 + Math.floor(Math.random() * 50);
+    const x = Math.floor(pos.x + Math.cos(angle) * dist);
+    const z = Math.floor(pos.z + Math.sin(angle) * dist);
     bot.pathfinder.setGoal(new GoalNear(x, Math.floor(pos.y), z, 3));
   }
 
@@ -105,14 +113,14 @@ export function init(bot, config, ctx) {
     if (!Object.keys(presets).length) return null;
     const positions = bot.findBlocks({
       matching: (b) => b.name.includes('sign'),
-      maxDistance: 64,
+      maxDistance: 24,
       count: 20,
     });
     for (const pos of positions) {
       const key = `${pos.x},${pos.y},${pos.z}`;
-      const lines = signTextCache.get(key);
-      // No cache entry yet = block_entity_data not received — skip to avoid false positives
-      if (lines === undefined) continue;
+      if (claimed.has(key)) continue;
+      const lines = getSignLines(pos);
+      if (lines === null) continue;
       if (matchesAnyPreset(lines, presets)) continue;
       const below = bot.blockAt(pos.offset(0, -1, 0));
       if (!below || below.name === 'air') continue;
@@ -135,40 +143,29 @@ export function init(bot, config, ctx) {
         const above2 = bot.blockAt(b.position.offset(0, 2, 0));
         return above?.name === 'air' && above2?.name === 'air';
       },
-      maxDistance: 8,
+      maxDistance: 32,
     });
     if (!block) return null;
     return { pos: block.position.offset(0, 1, 0), breakFirst: false };
   }
 
-  function waitForInventorySign(timeoutMs) {
-    return new Promise((resolve) => {
-      if (bot.inventory.items().some((i) => i.name.includes('sign'))) {
-        resolve(true);
-        return;
-      }
-      const timer = setTimeout(() => {
-        bot.removeListener('playerCollect', handler);
-        resolve(false);
-      }, timeoutMs);
-      function handler() {
-        if (bot.inventory.items().some((i) => i.name.includes('sign'))) {
-          clearTimeout(timer);
-          bot.removeListener('playerCollect', handler);
-          resolve(true);
-        }
-      }
-      bot.on('playerCollect', handler);
-    });
+  async function waitForInventorySign(timeoutMs) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (bot.inventory.items().some((i) => i.name.includes('sign'))) return true;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    return false;
   }
 
   async function runPipeline({ pos: targetPos, breakFirst }) {
     const localPresets = { ...presets };
+    const key = `${targetPos.x},${targetPos.y},${targetPos.z}`;
     busy = true;
     try {
       log(`[sign-switcher] ${breakFirst ? 'replacing sign' : 'placing sign'} at ${targetPos}`);
 
-      await bot.pathfinder.goto(new GoalNear(targetPos.x, targetPos.y, targetPos.z, 3));
+      await bot.pathfinder.goto(new GoalNear(targetPos.x, targetPos.y, targetPos.z, 2));
       if (stopped) return;
 
       if (breakFirst) {
@@ -177,23 +174,26 @@ export function init(bot, config, ctx) {
           log('[sign-switcher] sign gone before break');
           return;
         }
-        await packetBreak(signBlock);
+        try {
+          await packetBreak(signBlock);
+        } catch (digErr) {
+          log(`[sign-switcher] dig failed: ${digErr.message}`);
+          claimed.add(key); saveClaimed(claimed);
+          return;
+        }
         if (stopped) return;
 
-        await bot.pathfinder.goto(new GoalNear(targetPos.x, targetPos.y, targetPos.z, 1));
-        if (stopped) return;
-        await waitForInventorySign(5000);
+        // Bot is already within 2 blocks — wait for item auto-pickup
+        await waitForInventorySign(4000);
         if (stopped) return;
       }
 
       const signItem = bot.inventory.items().find((i) => i.name.includes('sign'));
       if (!signItem) {
         log('[sign-switcher] no sign in inventory');
+        claimed.add(key); saveClaimed(claimed);
         return;
       }
-
-      await bot.pathfinder.goto(new GoalNear(targetPos.x, targetPos.y, targetPos.z, 3));
-      if (stopped) return;
 
       const refBlock = bot.blockAt(targetPos.offset(0, -1, 0));
       if (!refBlock || refBlock.name === 'air') {
@@ -214,15 +214,14 @@ export function init(bot, config, ctx) {
       }
       const preset = getRandomPreset(localPresets);
       if (preset) {
-        await bot.updateSign(placedSign, preset.join('\n'), true);
-        // Update cache immediately so the next scan doesn't re-target this sign
-        // before the server's block_entity_data packet arrives
-        const writtenKey = `${targetPos.x},${targetPos.y},${targetPos.z}`;
-        signTextCache.set(writtenKey, preset);
-        ownWrites.add(writtenKey);
+        const trimmed = [...preset];
+        while (trimmed.length && trimmed[trimmed.length - 1] === '') trimmed.pop();
+        await bot.updateSign(placedSign, trimmed.join('\n'), false);
+        claimed.add(key); saveClaimed(claimed);
         log(`[sign-switcher] wrote sign at ${targetPos}`);
       }
     } catch (err) {
+      // Navigation or placement failure — don't block the position, it may work next scan
       log(`[sign-switcher] pipeline error: ${err.message}`);
     } finally {
       busy = false;
@@ -235,9 +234,10 @@ export function init(bot, config, ctx) {
       if (!bot.pathfinder.isMoving()) startWander();
       if (++scanTick >= (config.scanIntervalTicks ?? 20)) {
         scanTick = 0;
-        const hasSign = bot.inventory.items().some((i) => i.name.includes('sign'));
-        // If we already have signs, just place them — no need to break anything
-        const target = hasSign ? findPlacementSpot() : findSignToReplace();
+        // Always prefer replacing existing signs — if we have signs in inventory
+        // findSignToReplace still breaks and replaces (wasting the dropped item but that's fine).
+        // Fall back to placing on empty spots only when no replaceable sign is in range.
+        const target = findSignToReplace() ?? findPlacementSpot();
         if (target) {
           runPipeline(target).catch((err) => log(`[sign-switcher] unhandled: ${err.message}`));
         }
@@ -247,7 +247,7 @@ export function init(bot, config, ctx) {
     }
   }
 
-  reloadPresets().then(() => {
+  Promise.all([reloadPresets(), loadClaimed().then((c) => { claimed = c; })]).then(() => {
     if (stopped) return;
     const movements = new Movements(bot);
     bot.pathfinder.setMovements(movements);

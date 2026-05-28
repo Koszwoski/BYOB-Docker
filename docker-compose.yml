@@ -3,5 +3,6 @@ services:
     build: .
     restart: unless-stopped
     env_file: .env
+    user: root
     volumes:
-      - ./data:/app/data
+      - ./data:/app/data:Z

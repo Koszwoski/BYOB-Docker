@@ -174,6 +174,12 @@ function buildStatusEmbed({ bot, server, runtime }) {
     fields.push({ name: "Ping", value: `${runtime.ping}ms`, inline: true });
   }
 
+  if (runtime?.queuePosition !== null && runtime?.queuePosition !== undefined) {
+    const qLabel = runtime.queueType ? `2b2t Queue (${runtime.queueType})` : "2b2t Queue";
+    const etaPart = runtime.queueEta ? ` — ETA: ${runtime.queueEta}` : "";
+    fields.push({ name: qLabel, value: `Position: **${runtime.queuePosition}**${etaPart}`, inline: false });
+  }
+
   if (runtime?.playerCount !== undefined && runtime.playerCount !== null) {
     fields.push({
       name: "Players Online",
@@ -318,6 +324,7 @@ async function runCmdForBot(botNum, bot, subCommand, subArgs, handlers) {
     }
 
     if (subCommand === "disconnect" || subCommand === "dc") {
+      pendingConnectAborts.add(botNum);
       const result = await handlers.runBotActionById(bot.id, "stop");
       if (result.error) return `${prefix} ❌ ${result.error}`;
       return `${prefix} ✅ Disconnected`;
@@ -327,7 +334,14 @@ async function runCmdForBot(botNum, bot, subCommand, subArgs, handlers) {
       const result = handlers.getStatusById(bot.id);
       const s = result.bot?.status ?? "unknown";
       const emoji = s === "online" ? "🟢" : s === "connecting" ? "🟡" : "🔴";
-      return `${prefix} ${emoji} ${s}`;
+      const rt = result.runtime;
+      let extra = "";
+      if (rt?.queuePosition !== null && rt?.queuePosition !== undefined) {
+        const qType = rt.queueType ? ` (${rt.queueType})` : "";
+        const eta = rt.queueEta ? ` ETA: ${rt.queueEta}` : "";
+        extra = ` — Queue${qType}: #${rt.queuePosition}${eta}`;
+      }
+      return `${prefix} ${emoji} ${s}${extra}`;
     }
 
     if (subCommand === "enable" || subCommand === "e") {
@@ -363,11 +377,24 @@ async function runCmdForBot(botNum, bot, subCommand, subArgs, handlers) {
       return `${prefix} ✅ ${result.result}`;
     }
 
+    if (subCommand === "name") {
+      const mcName = handlers.getMcNameById(bot.id) ?? "unknown";
+      return `${prefix} **${mcName}**`;
+    }
+
+    if (subCommand === "reconnect" || subCommand === "r") {
+      const result = await handlers.runBotActionById(bot.id, "reconnect");
+      if (result.error) return `${prefix} ❌ ${result.error}`;
+      return `${prefix} ✅ Reconnecting...`;
+    }
+
     return `${prefix} ⚠️ Unknown sub-command: ${subCommand}`;
   } catch (err) {
     return `${prefix} ❌ ${err.message}`;
   }
 }
+
+const pendingConnectAborts = new Set();
 
 export async function startDiscordControl({
   authDiscordUser,
@@ -386,6 +413,7 @@ export async function startDiscordControl({
   disableAddonById,
   runAddonCommandById,
   authBotById,
+  getMcNameById,
   getBotCount,
   logger = console,
 }) {
@@ -567,16 +595,75 @@ export async function startDiscordControl({
           disableAddonById,
           runAddonCommandById,
           authBotById,
+          getMcNameById,
           channel: message.channel,
         };
 
-        const lines = await Promise.all(
-          targets.map((n) => {
-            const bot = getBotByNumber(n);
-            return runCmdForBot(n, bot, subCommand, subArgs, handlers);
-          })
-        );
+        const STAGGER_CMDS = new Set(["c", "connect", "r", "reconnect"]);
+        const stagger = STAGGER_CMDS.has(subCommand)
+          ? (Number(process.env.BOT_CMD_CONNECT_DELAY_MS) || 14000)
+          : 0;
+        const staggerOffset = stagger
+          ? (Number(process.env.BOT_CMD_CONNECT_OFFSET_MS) || 0)
+          : 0;
+        if (staggerOffset) await new Promise((r) => setTimeout(r, staggerOffset));
 
+        const lines = [];
+        for (const n of targets) {
+          if (stagger && pendingConnectAborts.has(n)) {
+            pendingConnectAborts.delete(n);
+            lines.push(`[${n}] ⏭️ Cancelled`);
+            continue;
+          }
+          const bot = getBotByNumber(n);
+          if (!bot) continue;
+          const line = await runCmdForBot(n, bot, subCommand, subArgs, handlers);
+          if (line) lines.push(line);
+          if (stagger && n !== targets[targets.length - 1]) {
+            await new Promise((r) => setTimeout(r, stagger));
+          }
+        }
+
+        const joined = lines.join("\n");
+        if (joined.length <= 2000) {
+          await message.reply(joined);
+        } else {
+          const chunks = [];
+          let cur = "";
+          for (const line of lines) {
+            if (cur.length + line.length + 1 > 1990) { chunks.push(cur); cur = line; }
+            else { cur = cur ? cur + "\n" + line : line; }
+          }
+          if (cur) chunks.push(cur);
+          for (const chunk of chunks) await message.reply(chunk);
+        }
+        return;
+      }
+
+      if (command === "queue" || command === "q") {
+        if (!hasManagementPermission(message, adminRoleId)) {
+          await message.reply("Only admins can use .queue.");
+          return;
+        }
+        const instanceOffset = Number(process.env.BOT_OFFSET ?? 0);
+        const instanceCount = Number(process.env.BOT_COUNT ?? 0);
+        const myMin = instanceOffset + 1;
+        const myMax = instanceOffset + instanceCount;
+        const lines = [`**Queue Overview [${myMin}-${myMax}]:**`];
+        for (let n = myMin; n <= myMax; n++) {
+          const bot = getBotByNumber(n);
+          if (!bot) { lines.push(`[${n}] ⚠️ not found`); continue; }
+          const { bot: b, runtime: rt } = getStatusById(bot.id);
+          const s = b?.status ?? "offline";
+          const emoji = s === "online" ? "🟢" : s === "connecting" ? "🟡" : "🔴";
+          let line = `[${n}] ${emoji} ${s}`;
+          if (rt?.queuePosition != null) {
+            const qType = rt.queueType ? ` (${rt.queueType})` : "";
+            const eta = rt.queueEta ? ` — ETA: ${rt.queueEta}` : "";
+            line += ` — Queue${qType}: #${rt.queuePosition}${eta}`;
+          }
+          lines.push(line);
+        }
         await message.reply(lines.join("\n"));
         return;
       }

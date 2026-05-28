@@ -20,6 +20,12 @@ importers:
       prismarine-auth:
         specifier: ^3.1.1
         version: 3.1.1
+      undici:
+        specifier: ^8.3.0
+        version: 8.3.0
+      vec3:
+        specifier: ^0.2.0
+        version: 0.2.0
 
 packages:
 
@@ -382,6 +388,10 @@ packages:
     resolution: {integrity: sha512-sC+b0tB1whOCzbtlx20fx3WgCXwkW627p4EA9uM+/tNNPkSS+eSEld6pAs9nDv7WbY1UUljBMYPtu9BCOrCWKA==}
     engines: {node: '>=18.17'}
 
+  undici@8.3.0:
+    resolution: {integrity: sha512-TkUDgb6tl7KOGZ+7e8E3d2FYgUQgF6z5YypqjWmixVQSQERFcVrVg0ySADm2LVLRh5ljAaHTCR5Fmz3Q34rB7Q==}
+    engines: {node: '>=22.19.0'}
+
   uri-js@4.4.1:
     resolution: {integrity: sha512-7rKUyy33Q1yc98pQ1DAmLtwX109F7TIfWlW1Ydo8Wl1ii1SeHieeh0HHfPeL2fMXK6z0s8ecKs9frCuLJvndBg==}
 
@@ -400,6 +410,9 @@ packages:
 
   vec3@0.1.10:
     resolution: {integrity: sha512-Sr1U3mYtMqCOonGd3LAN9iqy0qF6C+Gjil92awyK/i2OwiUo9bm7PnLgFpafymun50mOjnDcg4ToTgRssrlTcw==}
+
+  vec3@0.2.0:
+    resolution: {integrity: sha512-jOjU4zbCNWOKOGLHop1I0J2Ar4h5Zz76455LJhJKhiOJwI21QP6d5TnKklNZDKG+c5h71zWtPAbd9wh+Va57OQ==}
 
   webidl-conversions@3.0.1:
     resolution: {integrity: sha512-2JAn3z8AR6rjK8Sm8orRC0h/bcl/DqL7tRPdGZ4I1CjdF+EaMLmYxBHyXuKL849eucPFhvBoxMsflfOb8kxaeQ==}
@@ -892,6 +905,8 @@ snapshots:
 
   undici@6.24.1: {}
 
+  undici@8.3.0: {}
+
   uri-js@4.4.1:
     dependencies:
       punycode: 2.3.1
@@ -905,6 +920,8 @@ snapshots:
   uuid@8.3.2: {}
 
   vec3@0.1.10: {}
+
+  vec3@0.2.0: {}
 
   webidl-conversions@3.0.1: {}
 

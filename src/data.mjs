@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.resolve(__dirname, "../data");
-const STATE_FILE = path.join(DATA_DIR, "state.json");
+const STATE_FILE = process.env.STATE_FILE ? path.resolve(process.env.STATE_FILE) : path.join(DATA_DIR, "state.json");
 const PROFILES_DIR = path.join(DATA_DIR, "profiles");
 
 const defaultState = {
